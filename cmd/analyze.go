@@ -2,17 +2,14 @@ package cmd
 
 import (
 	"fmt"
-
-	"github.com/fatih/color"
 	"github.com/spf13/cobra"
-	"github.com/wagoodman/dive/image"
-	"github.com/wagoodman/dive/ui"
+	"github.com/wagoodman/dive/runtime"
 	"github.com/wagoodman/dive/utils"
 )
 
-// analyze takes a docker image tag, digest, or id and displays the
+// doAnalyzeCmd takes a docker image tag, digest, or id and displays the
 // image analysis to the screen
-func analyze(cmd *cobra.Command, args []string) {
+func doAnalyzeCmd(cmd *cobra.Command, args []string) {
 	defer utils.Cleanup()
 	if len(args) == 0 {
 		printVersionFlag, err := cmd.PersistentFlags().GetBool("version")
@@ -32,7 +29,12 @@ func analyze(cmd *cobra.Command, args []string) {
 		cmd.Help()
 		utils.Exit(1)
 	}
-	color.New(color.Bold).Println("Analyzing Image")
-	manifest, refTrees, efficiency, inefficiencies := image.InitializeData(userImage)
-	ui.Run(manifest, refTrees, efficiency, inefficiencies)
+
+	initLogging()
+
+	runtime.Run(runtime.Options{
+		ImageId:      userImage,
+		ExportFile:   exportFile,
+		CiConfigFile: ciConfigFile,
+	})
 }

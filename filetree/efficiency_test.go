@@ -1,21 +1,20 @@
 package filetree
 
 import (
-	"archive/tar"
 	"testing"
 )
 
-func TestEfficencyMap(t *testing.T) {
+func TestEfficency(t *testing.T) {
 	trees := make([]*FileTree, 3)
 	for idx := range trees {
 		trees[idx] = NewFileTree()
 	}
 
-	trees[0].AddPath("/etc/nginx/nginx.conf", FileInfo{TarHeader: tar.Header{Size: 2000}})
-	trees[0].AddPath("/etc/nginx/public", FileInfo{TarHeader: tar.Header{Size: 3000}})
+	trees[0].AddPath("/etc/nginx/nginx.conf", FileInfo{Size: 2000})
+	trees[0].AddPath("/etc/nginx/public", FileInfo{Size: 3000})
 
-	trees[1].AddPath("/etc/nginx/nginx.conf", FileInfo{TarHeader: tar.Header{Size: 5000}})
-	trees[1].AddPath("/etc/athing", FileInfo{TarHeader: tar.Header{Size: 10000}})
+	trees[1].AddPath("/etc/nginx/nginx.conf", FileInfo{Size: 5000})
+	trees[1].AddPath("/etc/athing", FileInfo{Size: 10000})
 
 	trees[2].AddPath("/etc/.wh.nginx", *BlankFileChangeInfo("/etc/.wh.nginx"))
 
@@ -33,7 +32,7 @@ func TestEfficencyMap(t *testing.T) {
 		for _, match := range actualMatches {
 			t.Logf("   match: %+v", match)
 		}
-		t.Fatalf("Expected to find %d inefficient path, but found %d", len(expectedMatches), len(actualMatches))
+		t.Fatalf("Expected to find %d inefficient paths, but found %d", len(expectedMatches), len(actualMatches))
 	}
 
 	if expectedMatches[0].Path != actualMatches[0].Path {
@@ -43,4 +42,26 @@ func TestEfficencyMap(t *testing.T) {
 	if expectedMatches[0].CumulativeSize != actualMatches[0].CumulativeSize {
 		t.Errorf("Expected cumulative size of %v but go %v", expectedMatches[0].CumulativeSize, actualMatches[0].CumulativeSize)
 	}
+}
+
+func TestEfficency_ScratchImage(t *testing.T) {
+	trees := make([]*FileTree, 3)
+	for idx := range trees {
+		trees[idx] = NewFileTree()
+	}
+
+	trees[0].AddPath("/nothing", FileInfo{Size: 0})
+
+	var expectedScore = 1.0
+	var expectedMatches = EfficiencySlice{}
+	actualScore, actualMatches := Efficiency(trees)
+
+	if expectedScore != actualScore {
+		t.Errorf("Expected score of %v but go %v", expectedScore, actualScore)
+	}
+
+	if len(actualMatches) > 0 {
+		t.Fatalf("Expected to find %d inefficient paths, but found %d", len(expectedMatches), len(actualMatches))
+	}
+
 }

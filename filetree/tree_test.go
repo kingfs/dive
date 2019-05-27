@@ -263,12 +263,12 @@ func TestCompareWithNoChanges(t *testing.T) {
 		fakeData := FileInfo{
 			Path:     value,
 			TypeFlag: 1,
-			MD5sum:   [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+			hash:     123,
 		}
 		lowerTree.AddPath(value, fakeData)
 		upperTree.AddPath(value, fakeData)
 	}
-	lowerTree.Compare(upperTree)
+	lowerTree.CompareAndMark(upperTree)
 	asserter := func(n *FileNode) error {
 		if n.Path() == "/" {
 			return nil
@@ -294,7 +294,7 @@ func TestCompareWithAdds(t *testing.T) {
 		lowerTree.AddPath(value, FileInfo{
 			Path:     value,
 			TypeFlag: 1,
-			MD5sum:   [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+			hash:     123,
 		})
 	}
 
@@ -302,12 +302,12 @@ func TestCompareWithAdds(t *testing.T) {
 		upperTree.AddPath(value, FileInfo{
 			Path:     value,
 			TypeFlag: 1,
-			MD5sum:   [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+			hash:     123,
 		})
 	}
 
 	failedAssertions := []error{}
-	err := lowerTree.Compare(upperTree)
+	err := lowerTree.CompareAndMark(upperTree)
 	if err != nil {
 		t.Errorf("Expected tree compare to have no errors, got: %v", err)
 	}
@@ -348,28 +348,68 @@ func TestCompareWithAdds(t *testing.T) {
 func TestCompareWithChanges(t *testing.T) {
 	lowerTree := NewFileTree()
 	upperTree := NewFileTree()
-	paths := [...]string{"/etc", "/usr", "/etc/hosts", "/etc/sudoers", "/usr/bin"}
+	changedPaths := []string{"/etc", "/usr", "/etc/hosts", "/etc/sudoers", "/usr/bin"}
 
-	for _, value := range paths {
+	for _, value := range changedPaths {
 		lowerTree.AddPath(value, FileInfo{
 			Path:     value,
 			TypeFlag: 1,
-			MD5sum:   [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+			hash:     123,
 		})
 		upperTree.AddPath(value, FileInfo{
 			Path:     value,
 			TypeFlag: 1,
-			MD5sum:   [16]byte{1, 1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0},
+			hash:     456,
 		})
 	}
 
-	lowerTree.Compare(upperTree)
+	chmodPath := "/etc/non-data-change"
+
+	lowerTree.AddPath(chmodPath, FileInfo{
+		Path:     chmodPath,
+		TypeFlag: 1,
+		hash:     123,
+		Mode:     0,
+	})
+
+	upperTree.AddPath(chmodPath, FileInfo{
+		Path:     chmodPath,
+		TypeFlag: 1,
+		hash:     123,
+		Mode:     1,
+	})
+
+	changedPaths = append(changedPaths, chmodPath)
+
+	chownPath := "/etc/non-data-change-2"
+
+	lowerTree.AddPath(chmodPath, FileInfo{
+		Path:     chownPath,
+		TypeFlag: 1,
+		hash:     123,
+		Mode:     1,
+		Gid:      0,
+		Uid:      0,
+	})
+
+	upperTree.AddPath(chmodPath, FileInfo{
+		Path:     chownPath,
+		TypeFlag: 1,
+		hash:     123,
+		Mode:     1,
+		Gid:      12,
+		Uid:      12,
+	})
+
+	changedPaths = append(changedPaths, chownPath)
+
+	lowerTree.CompareAndMark(upperTree)
 	failedAssertions := []error{}
 	asserter := func(n *FileNode) error {
 		p := n.Path()
 		if p == "/" {
 			return nil
-		} else if stringInSlice(p, []string{"/etc", "/usr", "/etc/hosts", "/etc/sudoers", "/usr/bin"}) {
+		} else if stringInSlice(p, changedPaths) {
 			if err := AssertDiffType(n, Changed); err != nil {
 				failedAssertions = append(failedAssertions, err)
 			}
@@ -404,7 +444,7 @@ func TestCompareWithRemoves(t *testing.T) {
 		fakeData := FileInfo{
 			Path:     value,
 			TypeFlag: 1,
-			MD5sum:   [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+			hash:     123,
 		}
 		lowerTree.AddPath(value, fakeData)
 	}
@@ -413,12 +453,12 @@ func TestCompareWithRemoves(t *testing.T) {
 		fakeData := FileInfo{
 			Path:     value,
 			TypeFlag: 1,
-			MD5sum:   [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+			hash:     123,
 		}
 		upperTree.AddPath(value, fakeData)
 	}
 
-	lowerTree.Compare(upperTree)
+	lowerTree.CompareAndMark(upperTree)
 	failedAssertions := []error{}
 	asserter := func(n *FileNode) error {
 		p := n.Path()
@@ -474,7 +514,7 @@ func TestStackRange(t *testing.T) {
 		fakeData := FileInfo{
 			Path:     value,
 			TypeFlag: 1,
-			MD5sum:   [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+			hash:     123,
 		}
 		lowerTree.AddPath(value, fakeData)
 	}
@@ -483,12 +523,12 @@ func TestStackRange(t *testing.T) {
 		fakeData := FileInfo{
 			Path:     value,
 			TypeFlag: 1,
-			MD5sum:   [16]byte{1, 1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0},
+			hash:     456,
 		}
 		upperTree.AddPath(value, fakeData)
 	}
 	trees := []*FileTree{lowerTree, upperTree, tree}
-	StackRange(trees, 0, 2)
+	StackTreeRange(trees, 0, 2)
 }
 
 func TestRemoveOnIterate(t *testing.T) {
@@ -500,9 +540,9 @@ func TestRemoveOnIterate(t *testing.T) {
 		fakeData := FileInfo{
 			Path:     value,
 			TypeFlag: 1,
-			MD5sum:   [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+			hash:     123,
 		}
-		node, err := tree.AddPath(value, fakeData)
+		node, _, err := tree.AddPath(value, fakeData)
 		if err == nil && stringInSlice(node.Path(), []string{"/etc"}) {
 			node.Data.ViewInfo.Hidden = true
 		}

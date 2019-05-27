@@ -2,12 +2,11 @@ package filetree
 
 import (
 	"archive/tar"
-	"bytes"
-	"crypto/md5"
 	"fmt"
-	"github.com/sirupsen/logrus"
-	"github.com/spf13/viper"
 	"io"
+
+	"github.com/cespare/xxhash"
+	"github.com/sirupsen/logrus"
 )
 
 const (
@@ -17,29 +16,7 @@ const (
 	Removed
 )
 
-// NodeData is the payload for a FileNode
-type NodeData struct {
-	ViewInfo ViewInfo
-	FileInfo FileInfo
-	DiffType DiffType
-}
-
-// ViewInfo contains UI specific detail for a specific FileNode
-type ViewInfo struct {
-	Collapsed bool
-	Hidden    bool
-}
-
-// FileInfo contains tar metadata for a specific FileNode
-type FileInfo struct {
-	Path      string
-	TypeFlag  byte
-	MD5sum    [16]byte
-	TarHeader tar.Header
-}
-
-// DiffType defines the comparison result between two FileNodes
-type DiffType int
+var GlobalFileTreeCollapse bool
 
 // NewNodeData creates an empty NodeData struct for a FileNode
 func NewNodeData() *NodeData {
@@ -62,7 +39,7 @@ func (data *NodeData) Copy() *NodeData {
 // NewViewInfo creates a default ViewInfo
 func NewViewInfo() (view *ViewInfo) {
 	return &ViewInfo{
-		Collapsed: viper.GetBool("filetree.collapse-dir"),
+		Collapsed: GlobalFileTreeCollapse,
 		Hidden:    false,
 	}
 }
@@ -74,27 +51,53 @@ func (view *ViewInfo) Copy() (newView *ViewInfo) {
 	return newView
 }
 
+func getHashFromReader(reader io.Reader) uint64 {
+	h := xxhash.New()
+
+	buf := make([]byte, 1024)
+	for {
+		n, err := reader.Read(buf)
+		if err != nil && err != io.EOF {
+			logrus.Panic(err)
+		}
+		if n == 0 {
+			break
+		}
+
+		h.Write(buf[:n])
+	}
+
+	return h.Sum64()
+}
+
 // NewFileInfo extracts the metadata from a tar header and file contents and generates a new FileInfo object.
 func NewFileInfo(reader *tar.Reader, header *tar.Header, path string) FileInfo {
 	if header.Typeflag == tar.TypeDir {
 		return FileInfo{
-			Path:      path,
-			TypeFlag:  header.Typeflag,
-			MD5sum:    [16]byte{},
-			TarHeader: *header,
+			Path:     path,
+			TypeFlag: header.Typeflag,
+			Linkname: header.Linkname,
+			hash:     0,
+			Size:     header.FileInfo().Size(),
+			Mode:     header.FileInfo().Mode(),
+			Uid:      header.Uid,
+			Gid:      header.Gid,
+			IsDir:    header.FileInfo().IsDir(),
 		}
 	}
-	fileBytes := make([]byte, header.Size)
-	_, err := reader.Read(fileBytes)
-	if err != nil && err != io.EOF {
-		logrus.Panic(err)
-	}
+
+	hash := getHashFromReader(reader)
 
 	return FileInfo{
-		Path:      path,
-		TypeFlag:  header.Typeflag,
-		MD5sum:    md5.Sum(fileBytes),
-		TarHeader: *header,
+		Path:     path,
+		TypeFlag: header.Typeflag,
+		Linkname: header.Linkname,
+		hash:     hash,
+		Size:     header.FileInfo().Size(),
+		Mode:     header.FileInfo().Mode(),
+		Uid:      header.Uid,
+		Gid:      header.Gid,
+		IsDir:    header.FileInfo().IsDir(),
 	}
 }
 
@@ -104,17 +107,25 @@ func (data *FileInfo) Copy() *FileInfo {
 		return nil
 	}
 	return &FileInfo{
-		Path:      data.Path,
-		TypeFlag:  data.TypeFlag,
-		MD5sum:    data.MD5sum,
-		TarHeader: data.TarHeader,
+		Path:     data.Path,
+		TypeFlag: data.TypeFlag,
+		Linkname: data.Linkname,
+		hash:     data.hash,
+		Size:     data.Size,
+		Mode:     data.Mode,
+		Uid:      data.Uid,
+		Gid:      data.Gid,
+		IsDir:    data.IsDir,
 	}
 }
 
 // Compare determines the DiffType between two FileInfos based on the type and contents of each given FileInfo
 func (data *FileInfo) Compare(other FileInfo) DiffType {
 	if data.TypeFlag == other.TypeFlag {
-		if bytes.Compare(data.MD5sum[:], other.MD5sum[:]) == 0 {
+		if data.hash == other.hash &&
+			data.Mode == other.Mode &&
+			data.Uid == other.Uid &&
+			data.Gid == other.Gid {
 			return Unchanged
 		}
 	}

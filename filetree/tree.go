@@ -20,15 +20,6 @@ const (
 	collapsedItem        = "⊕ "
 )
 
-// FileTree represents a set of files, directories, and their relations.
-type FileTree struct {
-	Root     *FileNode
-	Size     int
-	FileSize uint64
-	Name     string
-	Id       uuid.UUID
-}
-
 // NewFileTree creates an empty FileTree
 func NewFileTree() (tree *FileTree) {
 	tree = new(FileTree)
@@ -128,14 +119,42 @@ func (tree *FileTree) renderStringTreeBetween(startRow, stopRow int, showAttribu
 	return result
 }
 
+func (tree *FileTree) VisibleSize() int {
+	var size int
+
+	visitor := func(node *FileNode) error {
+		size++
+		return nil
+	}
+	visitEvaluator := func(node *FileNode) bool {
+		if node.Data.FileInfo.IsDir {
+			// we won't visit a collapsed dir, but we need to count it
+			if node.Data.ViewInfo.Collapsed {
+				size++
+			}
+			return !node.Data.ViewInfo.Collapsed && !node.Data.ViewInfo.Hidden
+		}
+		return !node.Data.ViewInfo.Hidden
+	}
+	err := tree.VisitDepthParentFirst(visitor, visitEvaluator)
+	if err != nil {
+		logrus.Errorf("unable to determine visible tree size: %+v", err)
+	}
+
+	// don't include root
+	size--
+
+	return size
+}
+
 // String returns the entire tree in an ASCII representation.
 func (tree *FileTree) String(showAttributes bool) string {
 	return tree.renderStringTreeBetween(0, tree.Size, showAttributes)
 }
 
 // StringBetween returns a partial tree in an ASCII representation.
-func (tree *FileTree) StringBetween(start, stop uint, showAttributes bool) string {
-	return tree.renderStringTreeBetween(int(start), int(stop), showAttributes)
+func (tree *FileTree) StringBetween(start, stop int, showAttributes bool) string {
+	return tree.renderStringTreeBetween(start, stop, showAttributes)
 }
 
 // Copy returns a copy of the given FileTree
@@ -146,10 +165,14 @@ func (tree *FileTree) Copy() *FileTree {
 	newTree.Root = tree.Root.Copy(newTree.Root)
 
 	// update the tree pointers
-	newTree.VisitDepthChildFirst(func(node *FileNode) error {
+	err := newTree.VisitDepthChildFirst(func(node *FileNode) error {
 		node.Tree = newTree
 		return nil
 	}, nil)
+
+	if err != nil {
+		logrus.Errorf("unable to propagate tree on copy(): %+v", err)
+	}
 
 	return newTree
 }
@@ -179,7 +202,7 @@ func (tree *FileTree) Stack(upper *FileTree) error {
 				return fmt.Errorf("cannot remove node %s: %v", node.Path(), err.Error())
 			}
 		} else {
-			newNode, err := tree.AddPath(node.Path(), node.Data.FileInfo)
+			newNode, _, err := tree.AddPath(node.Path(), node.Data.FileInfo)
 			if err != nil {
 				return fmt.Errorf("cannot add node %s: %v", newNode.Path(), err.Error())
 			}
@@ -206,9 +229,10 @@ func (tree *FileTree) GetNode(path string) (*FileNode, error) {
 }
 
 // AddPath adds a new node to the tree with the given payload
-func (tree *FileTree) AddPath(path string, data FileInfo) (*FileNode, error) {
+func (tree *FileTree) AddPath(path string, data FileInfo) (*FileNode, []*FileNode, error) {
 	nodeNames := strings.Split(strings.Trim(path, "/"), "/")
 	node := tree.Root
+	addedNodes := make([]*FileNode, 0)
 	for idx, name := range nodeNames {
 		if name == "" {
 			continue
@@ -220,10 +244,11 @@ func (tree *FileTree) AddPath(path string, data FileInfo) (*FileNode, error) {
 			// don't attach the payload. The payload is destined for the
 			// Path's end node, not any intermediary node.
 			node = node.AddChild(name, FileInfo{})
+			addedNodes = append(addedNodes, node)
 
 			if node == nil {
 				// the child could not be added
-				return node, fmt.Errorf(fmt.Sprintf("could not add child node '%s'", name))
+				return node, addedNodes, fmt.Errorf(fmt.Sprintf("could not add child node '%s'", name))
 			}
 		}
 
@@ -233,7 +258,7 @@ func (tree *FileTree) AddPath(path string, data FileInfo) (*FileNode, error) {
 		}
 
 	}
-	return node, nil
+	return node, addedNodes, nil
 }
 
 // RemovePath removes a node from the tree given its path.
@@ -245,10 +270,19 @@ func (tree *FileTree) RemovePath(path string) error {
 	return node.Remove()
 }
 
-// Compare marks the FileNodes in the owning (lower) tree with DiffType annotations when compared to the given (upper) tree.
-func (tree *FileTree) Compare(upper *FileTree) error {
+type compareMark struct {
+	lowerNode *FileNode
+	upperNode *FileNode
+	tentative DiffType
+	final     DiffType
+}
+
+// CompareAndMark marks the FileNodes in the owning (lower) tree with DiffType annotations when compared to the given (upper) tree.
+func (tree *FileTree) CompareAndMark(upper *FileTree) error {
 	// always compare relative to the original, unaltered tree.
-	originalTree := tree.Copy()
+	originalTree := tree
+
+	modifications := make([]compareMark, 0)
 
 	graft := func(upperNode *FileNode) error {
 		if upperNode.IsWhiteout() {
@@ -256,28 +290,50 @@ func (tree *FileTree) Compare(upper *FileTree) error {
 			if err != nil {
 				return fmt.Errorf("cannot remove upperNode %s: %v", upperNode.Path(), err.Error())
 			}
-		} else {
-			// compare against the original tree (to ensure new parents with new children are captured as new instead of modified)
-			originalLowerNode, _ := originalTree.GetNode(upperNode.Path())
-
-			if originalLowerNode == nil {
-				newNode, err := tree.AddPath(upperNode.Path(), upperNode.Data.FileInfo)
-				if err != nil {
-					return fmt.Errorf("cannot add new upperNode %s: %v", upperNode.Path(), err.Error())
-				}
-				newNode.AssignDiffType(Added)
-			} else {
-				// check the tree for comparison markings
-				lowerNode, _ := tree.GetNode(upperNode.Path())
-
-				diffType := lowerNode.compare(upperNode)
-				return lowerNode.deriveDiffType(diffType)
-			}
+			return nil
 		}
+
+		// note: since we are not comparing against the original tree (copying the tree is expensive) we may mark the parent
+		// of an added node incorrectly as modified. This will be corrected later.
+		originalLowerNode, _ := originalTree.GetNode(upperNode.Path())
+
+		if originalLowerNode == nil {
+			_, newNodes, err := tree.AddPath(upperNode.Path(), upperNode.Data.FileInfo)
+			if err != nil {
+				return fmt.Errorf("cannot add new upperNode %s: %v", upperNode.Path(), err.Error())
+			}
+			for idx := len(newNodes) - 1; idx >= 0; idx-- {
+				newNode := newNodes[idx]
+				modifications = append(modifications, compareMark{lowerNode: newNode, upperNode: upperNode, tentative: -1, final: Added})
+			}
+			return nil
+		}
+
+		// the file exists in the lower layer
+		lowerNode, _ := tree.GetNode(upperNode.Path())
+		diffType := lowerNode.compare(upperNode)
+		modifications = append(modifications, compareMark{lowerNode: lowerNode, upperNode: upperNode, tentative: diffType, final: -1})
+
 		return nil
 	}
 	// we must visit from the leaves upwards to ensure that diff types can be derived from and assigned to children
-	return upper.VisitDepthChildFirst(graft, nil)
+	err := upper.VisitDepthChildFirst(graft, nil)
+	if err != nil {
+		return err
+	}
+
+	// take note of the comparison results on each note in the owning tree.
+	for _, pair := range modifications {
+		if pair.final > 0 {
+			pair.lowerNode.AssignDiffType(pair.final)
+		} else if pair.lowerNode.Data.DiffType == Unchanged {
+			pair.lowerNode.deriveDiffType(pair.tentative)
+		}
+
+		// persist the upper's payload on the owning tree
+		pair.lowerNode.Data.FileInfo = *pair.upperNode.Data.FileInfo.Copy()
+	}
+	return nil
 }
 
 // markRemoved annotates the FileNode at the given path as Removed.
@@ -289,15 +345,15 @@ func (tree *FileTree) markRemoved(path string) error {
 	return node.AssignDiffType(Removed)
 }
 
-// StackRange combines an array of trees into a single tree
-func StackRange(trees []*FileTree, start, stop int) *FileTree {
+// StackTreeRange combines an array of trees into a single tree
+func StackTreeRange(trees []*FileTree, start, stop int) *FileTree {
+
 	tree := trees[0].Copy()
 	for idx := start; idx <= stop; idx++ {
 		err := tree.Stack(trees[idx])
 		if err != nil {
-			logrus.Debug("could not stack tree range:", err)
+			logrus.Errorf("could not stack tree range: %v", err)
 		}
 	}
-
 	return tree
 }

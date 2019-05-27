@@ -6,17 +6,6 @@ import (
 	"sort"
 )
 
-// EfficiencyData represents the storage and reference statistics for a given file tree path.
-type EfficiencyData struct {
-	Path              string
-	Nodes             []*FileNode
-	CumulativeSize    int64
-	minDiscoveredSize int64
-}
-
-// EfficiencySlice represents an ordered set of EfficiencyData data structures.
-type EfficiencySlice []*EfficiencyData
-
 // Len is required for sorting.
 func (efs EfficiencySlice) Len() int {
 	return len(efs)
@@ -59,19 +48,22 @@ func Efficiency(trees []*FileTree) (float64, EfficiencySlice) {
 
 		if node.IsWhiteout() {
 			sizer := func(curNode *FileNode) error {
-				sizeBytes += curNode.Data.FileInfo.TarHeader.FileInfo().Size()
+				sizeBytes += curNode.Data.FileInfo.Size
 				return nil
 			}
-			stackedTree := StackRange(trees, 0, currentTree-1)
+			stackedTree := StackTreeRange(trees, 0, currentTree-1)
 			previousTreeNode, err := stackedTree.GetNode(node.Path())
 			if err != nil {
 				logrus.Debug(fmt.Sprintf("CurrentTree: %d : %s", currentTree, err))
-			} else if previousTreeNode.Data.FileInfo.TarHeader.FileInfo().IsDir() {
-				previousTreeNode.VisitDepthChildFirst(sizer, nil)
+			} else if previousTreeNode.Data.FileInfo.IsDir {
+				err = previousTreeNode.VisitDepthChildFirst(sizer, nil)
+				if err != nil {
+					logrus.Errorf("unable to propagate whiteout dir: %+v", err)
+				}
 			}
 
 		} else {
-			sizeBytes = node.Data.FileInfo.TarHeader.FileInfo().Size()
+			sizeBytes = node.Data.FileInfo.Size
 		}
 
 		data.CumulativeSize += sizeBytes
@@ -91,7 +83,10 @@ func Efficiency(trees []*FileTree) (float64, EfficiencySlice) {
 	}
 	for idx, tree := range trees {
 		currentTree = idx
-		tree.VisitDepthChildFirst(visitor, visitEvaluator)
+		err := tree.VisitDepthChildFirst(visitor, visitEvaluator)
+		if err != nil {
+			logrus.Errorf("unable to propagate ref tree: %+v", err)
+		}
 	}
 
 	// calculate the score
@@ -102,7 +97,12 @@ func Efficiency(trees []*FileTree) (float64, EfficiencySlice) {
 		minimumPathSizes += value.minDiscoveredSize
 		discoveredPathSizes += value.CumulativeSize
 	}
-	score := float64(minimumPathSizes) / float64(discoveredPathSizes)
+	var score float64
+	if discoveredPathSizes == 0 {
+		score = 1.0
+	} else {
+		score = float64(minimumPathSizes) / float64(discoveredPathSizes)
+	}
 
 	sort.Sort(inefficientMatches)
 

@@ -6,7 +6,7 @@ import (
 
 func TestAssignDiffType(t *testing.T) {
 	tree := NewFileTree()
-	node, err := tree.AddPath("/usr", *BlankFileChangeInfo("/usr"))
+	node, _, err := tree.AddPath("/usr", *BlankFileChangeInfo("/usr"))
 	if err != nil {
 		t.Errorf("Expected no error from fetching path. got: %v", err)
 	}
@@ -35,7 +35,7 @@ func BlankFileChangeInfo(path string) (f *FileInfo) {
 	result := FileInfo{
 		Path:     path,
 		TypeFlag: 1,
-		MD5sum:   [16]byte{1, 1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0},
+		hash:     123,
 	}
 	return &result
 }

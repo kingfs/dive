@@ -1,5 +1,6 @@
 # dive
 [![Go Report Card](https://goreportcard.com/badge/github.com/wagoodman/dive)](https://goreportcard.com/report/github.com/wagoodman/dive)
+[![Pipeline Status](https://api.travis-ci.org/wagoodman/dive.svg?branch=master)](https://travis-ci.org/wagoodman/dive)
 
 **A tool for exploring a docker image, layer contents, and discovering ways to shrink your Docker image size.**
 
@@ -14,6 +15,25 @@ or if you want to build your image then jump straight into analyzing it:
 ```bash
 dive build -t <some-tag> .
 ```
+
+Building on Macbook
+
+```bash
+docker run --rm -it \
+      -v /usr/local/bin/docker:/bin/docker \
+      -v /var/run/docker.sock:/var/run/docker.sock \
+      -v  "$(pwd)":"$(pwd)" \
+      -w "$(pwd)" \
+      -v "$HOME/.dive.yaml":"$HOME/.dive.yaml" \
+      wagoodman/dive:latest build -t <some-tag> .
+```
+
+Additionally you can run this in your CI pipeline to ensure you're keeping wasted space to a minimum (this skips the UI):
+```
+CI=true dive <your-image>
+```
+
+![Image](.data/demo-ci.png)
 
 **This is beta quality!** *Feel free to submit an issue if you want a new feature or find a bug :)*
 
@@ -46,19 +66,22 @@ You can build a Docker image and do an immediate analysis with one command:
 You only need to replace your `docker build` command with the same `dive build`
 command.
 
+**CI Integration**
+Analyze and image and get a pass/fail result based on the image efficiency and wasted space. Simply set `CI=true` in the environment when invoking any valid dive command.
+
 
 ## Installation
 
 **Ubuntu/Debian**
 ```bash
-wget https://github.com/wagoodman/dive/releases/download/v0.3.0/dive_0.3.0_linux_amd64.deb
-sudo apt install ./dive_0.3.0_linux_amd64.deb
+wget https://github.com/wagoodman/dive/releases/download/v0.7.2/dive_0.7.2_linux_amd64.deb
+sudo apt install ./dive_0.7.2_linux_amd64.deb
 ```
 
 **RHEL/Centos**
 ```bash
-curl -OL https://github.com/wagoodman/dive/releases/download/v0.3.0/dive_0.3.0_linux_amd64.rpm
-rpm -i dive_0.3.0_linux_amd64.rpm
+curl -OL https://github.com/wagoodman/dive/releases/download/v0.7.2/dive_0.7.2_linux_amd64.rpm
+rpm -i dive_0.7.2_linux_amd64.rpm
 ```
 
 **Arch Linux**
@@ -66,10 +89,10 @@ rpm -i dive_0.3.0_linux_amd64.rpm
 Available as [dive](https://aur.archlinux.org/packages/dive/) in the Arch User Repository (AUR).
 
 ```bash
-aurman -S dive
+yay -S dive
 ```
 
-The above example assumes `aurman` as the tool for installing AUR packages.
+The above example assumes [`yay`](https://aur.archlinux.org/packages/yay/) as the tool for installing AUR packages.
 *Note*: the AUR repository is **not** controlled by the dive project maintainer. 
 
 **Mac**
@@ -77,12 +100,19 @@ The above example assumes `aurman` as the tool for installing AUR packages.
 brew tap wagoodman/dive
 brew install dive
 ```
-or download a Darwin build from the releases page.
+or download the latest Darwin build from the [releases page](https://github.com/wagoodman/dive/releases/download/v0.7.2/dive_0.7.2_darwin_amd64.tar.gz).
+
+**Windows**
+
+Download the [latest release](https://github.com/wagoodman/dive/releases/download/v0.7.2/dive_0.7.2_windows_amd64.zip).
 
 **Go tools**
+Requires Go version 1.9 or higher.
+
 ```bash
 go get github.com/wagoodman/dive
 ```
+*Note*: installing in this way you will not see a proper version when running `dive -v`.
 
 **Docker**
 ```bash
@@ -121,24 +151,46 @@ docker run --rm -it \
     wagoodman/dive:latest <dive arguments...>
 ```
 
+## CI Integration
+
+When running dive with the environment variable `CI=true` then the dive UI will be bypassed and will instead analyze your docker image, giving it a pass/fail indication via return code. Currently there are three metrics supported via a `.dive-ci` file that you can put at the root of your repo:
+```
+rules:
+  # If the efficiency is measured below X%, mark as failed.
+  # Expressed as a percentage between 0-1.
+  lowestEfficiency: 0.95
+
+  # If the amount of wasted space is at least X or larger than X, mark as failed.
+  # Expressed in B, KB, MB, and GB.
+  highestWastedBytes: 20MB
+
+  # If the amount of wasted space makes up for X% or more of the image, mark as failed.
+  # Note: the base image layer is NOT included in the total image size.
+  # Expressed as a percentage between 0-1; fails if the threshold is met or crossed.
+  highestUserWastedPercent: 0.20
+```
+You can override the CI config path with the `--ci-config` option.
+
 ## KeyBindings
 
 Key Binding                                | Description
 -------------------------------------------|---------------------------------------------------------
 <kbd>Ctrl + C</kbd>                        | Exit
-<kbd>Tab</kbd> or <kbd>Ctrl + Space</kbd>  | Switch between the layer and filetree views
+<kbd>Tab</kbd>                             | Switch between the layer and filetree views
 <kbd>Ctrl + F</kbd>                        | Filter files
+<kbd>PageUp</kbd>                          | Scroll up a page
+<kbd>PageDown</kbd>                        | Scroll down a page
 <kbd>Ctrl + A</kbd>                        | Layer view: see aggregated image modifications
 <kbd>Ctrl + L</kbd>                        | Layer view: see current layer modifications
 <kbd>Space</kbd>                           | Filetree view: collapse/uncollapse a directory
+<kbd>Ctrl + Space</kbd>                    | Filetree view: collapse/uncollapse all directories
 <kbd>Ctrl + A</kbd>                        | Filetree view: show/hide added files
 <kbd>Ctrl + R</kbd>                        | Filetree view: show/hide removed files
 <kbd>Ctrl + M</kbd>                        | Filetree view: show/hide modified files
 <kbd>Ctrl + U</kbd>                        | Filetree view: show/hide unmodified files
-<kbd>PageUp</kbd>                          | Filetree view: scroll up a page
-<kbd>PageDown</kbd>                        | Filetree view: scroll down a page
+<kbd>Ctrl + B</kbd>                        | Filetree view: show/hide file attributes
 
-## Configuration
+## UI Configuration
 
 No configuration is necessary, however, you can create a config file and override values:
 ```yaml
@@ -152,7 +204,7 @@ log:
 keybinding:
   # Global bindings
   quit: ctrl+c
-  toggle-view: tab, ctrl+space
+  toggle-view: tab
   filter-files: ctrl+f, ctrl+slash
 
   # Layer view specific bindings  
@@ -161,10 +213,12 @@ keybinding:
 
   # File view specific bindings
   toggle-collapse-dir: space
+  toggle-collapse-all-dir: ctrl+space
   toggle-added-files: ctrl+a
   toggle-removed-files: ctrl+r
   toggle-modified-files: ctrl+m
   toggle-unmodified-files: ctrl+u
+  toggle-filetree-attributes: ctrl+b
   page-up: pgup
   page-down: pgdn
   
@@ -182,6 +236,9 @@ filetree:
 
   # The percentage of screen width the filetree should take on the screen (must be >0 and <1)
   pane-width: 0.5
+  
+  # Show the file attributes next to the filetree
+  show-attributes: true
 
 layer:
   # Enable showing all changes from this layer and ever previous layer
@@ -190,6 +247,7 @@ layer:
 ```
 
 dive will search for configs in the following locations:
+- `$XDG_CONFIG_HOME/dive/*.yaml`
+- `$XDG_CONFIG_DIRS/dive/*.yaml`
+- `~/.config/dive/*.yaml`
 - `~/.dive.yaml`
-- `$XDG_CONFIG_HOME/dive.yaml`
-- `~/.config/dive.yaml`
